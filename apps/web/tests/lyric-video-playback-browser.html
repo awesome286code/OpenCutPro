@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="vi"><meta charset="utf-8"><title>Lyric export playback QA</title>
+<style>body{font:16px system-ui;background:#17171b;color:#eee;padding:24px}input{padding:16px}pre{white-space:pre-wrap}video{display:block;width:min(100%,960px)}</style>
+<h1>Lyric export · kiểm tra decode và tua</h1><p>File được mở bằng Object URL tại máy, không gửi tới server.</p>
+<input id="file" type="file" accept="video/mp4" aria-label="MP4 mẫu đã xuất"><pre id="result" role="status">Ready</pre><video id="video" controls muted></video>
+<script type="module">
+const video=document.querySelector('#video'),result=document.querySelector('#result');let url
+const wait=event=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>{cleanup();reject(Error('Timeout '+event))},15000),done=()=>{cleanup();resolve()},fail=()=>{cleanup();reject(Error('Decode failed'))},cleanup=()=>{clearTimeout(timer);video.removeEventListener(event,done);video.removeEventListener('error',fail)};video.addEventListener(event,done,{once:true});video.addEventListener('error',fail,{once:true})})
+document.querySelector('#file').onchange=async event=>{
+ try{
+  const file=event.target.files[0];if(!file)return
+  if(url)URL.revokeObjectURL(url);url=URL.createObjectURL(file)
+  const ready=wait('loadeddata');video.src=url;await ready
+  if(video.videoWidth!==960||video.videoHeight!==540||video.duration<11.8||video.duration>12.5)throw Error('Unexpected 12s 540p dimensions/duration')
+  for(const time of [1,4.65,8.65,11]){const seek=wait('seeked');video.currentTime=time;await seek;if(video.readyState<2)throw Error('Missing decoded frame at '+time)}
+  const before=video.currentTime,advance=wait('timeupdate');await video.play();await advance;video.pause()
+  if(video.currentTime<=before)throw Error('Playback clock did not advance')
+  const seek=wait('seeked');video.currentTime=4.65;await seek
+  result.textContent=`PASS · ${file.name}\n${video.videoWidth}×${video.videoHeight} · ${video.duration.toFixed(3)}s · ${(file.size/1048576).toFixed(2)}MB\n4 seeks decoded, playback clock advanced, lyric frame shown below.`
+ }catch(error){result.textContent='FAIL: '+error.message}
+}
+window.addEventListener('pagehide',()=>{if(url)URL.revokeObjectURL(url)})
+</script></html>

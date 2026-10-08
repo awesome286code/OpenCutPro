@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi"><meta charset="utf-8"><title>Vietnamese subtitles QA fixture</title>
+<body><main><h1>Subtitle translation · isolated QA</h1><p>Chỉ dùng port 5175. Tạo project kiểm thử ba câu với audio im lặng tổng hợp, không dùng audio/project cá nhân.</p><button id="seed">Tạo project QA & mở editor</button><button id="fresh">Tạo project chỉ lời Trung</button><button id="draft">Tạo Pinyin + bản nháp Việt có cảnh báo</button><button id="verify">Kiểm tra project đã lưu</button><pre id="result">Ready</pre></main>
+<style>body{background:#191920;color:#eee;font:14px sans-serif;padding:24px}button{padding:12px;margin:8px;background:#c5f36b;border:0;border-radius:8px}pre{white-space:pre-wrap}</style>
+<script type="module">
+import { applyProfessionalLyricStyle, makeBilingualCaptions } from '/src/lib/bilingual-captions.ts'
+const source = ['你知道嗎', '走得越遠', '才越知道什麼叫故鄉'].map((text,index) => ({ id: `translation-qa-${index}`, text, start:index*2, duration:2, origin:'auto', sourceClipId:'translation-qa-audio', track:0, x:50, y:72, size:88, color:'#fff', font:'Noto Sans TC' }))
+async function db() { if(location.port!=='5175') throw Error('Chỉ chạy fixture trên port 5175'); return await new Promise((resolve,reject)=>{const request=indexedDB.open('opencut-local-media',2);request.onupgradeneeded=()=>{for(const name of ['files','projects'])if(!request.result.objectStoreNames.contains(name))request.result.createObjectStore(name,{keyPath:'id'})};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error)}) }
+async function seed(fresh=false, draftOnly=false) {
+  const database=await db(), samples=48000*6, bytes=new ArrayBuffer(44+samples*2), view=new DataView(bytes)
+  const ascii=(offset,text)=>Array.from(text).forEach((char,index)=>view.setUint8(offset+index,char.charCodeAt(0)))
+  ascii(0,'RIFF');view.setUint32(4,36+samples*2,true);ascii(8,'WAVE');ascii(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,48000,true);view.setUint32(28,96000,true);view.setUint16(32,2,true);view.setUint16(34,16,true);ascii(36,'data');view.setUint32(40,samples*2,true)
+  const captions=fresh ? source : draftOnly ? applyProfessionalLyricStyle([...source,...makeBilingualCaptions(source,null,'pinyin',1,2)]) : applyProfessionalLyricStyle([...source,...makeBilingualCaptions(source,['Ngươi biết đấy','Đi càng nhiều','Mới càng biết cái gì gọi là cố nhân'],'both',1,2)])
+  const transaction=database.transaction(['projects','files'],'readwrite')
+  transaction.objectStore('projects').put({id:'subtitle-draft',draft:draftOnly ? {mode:'vietnamese',source,sourceSignature:JSON.stringify(source.map(({id,text,start,duration,sourceClipId})=>({id,text,start,duration,sourceClipId}))),rows:[{id:source[0].id,text:'Bạn biết không?',needsReview:true,reason:'Nghe lại lời hát',reviewed:false},{id:source[1].id,text:'Càng đi xa',needsReview:false,reason:'',reviewed:false}],options:{engine:'contextual',style:'natural',notes:'',autoApply:true}} : null})
+  transaction.objectStore('files').put({id:'translation-qa-asset',name:'Translation QA.wav',type:'AUDIO',duration:6,blob:new Blob([bytes],{type:'audio/wav'})})
+  transaction.objectStore('projects').put({id:'current',version:3,name:'Translation QA',aspectRatio:'9:16',clips:[{id:'translation-qa-audio',assetId:'translation-qa-asset',start:0,trimStart:0,trimEnd:6,audioTrack:0}],textCaptions:captions,timelineLayers:[{id:'qa-audio',type:'AUDIO',index:0,name:'Audio QA'},{id:'qa-text',type:'TEXT',index:0,name:'Lời từ audio'},{id:'qa-pinyin',type:'TEXT',index:1,name:'Pinyin'},{id:'qa-viet',type:'TEXT',index:2,name:'Việt sub'}],hiddenLayers:{},mutedLayers:{}})
+  await new Promise((resolve,reject)=>{transaction.oncomplete=resolve;transaction.onabort=()=>reject(transaction.error)});database.close();location.href='/editor'
+}
+document.querySelector('#seed').onclick=()=>seed()
+document.querySelector('#fresh').onclick=()=>seed(true)
+document.querySelector('#draft').onclick=()=>seed(false,true)
+document.querySelector('#verify').onclick=async()=>{
+ const database=await db();const request=database.transaction('projects','readonly').objectStore('projects').get('current');request.onsuccess=()=>{const snapshot=request.result;document.querySelector('#result').textContent=JSON.stringify({captions:snapshot.textCaptions.map(c=>({id:c.id,text:c.text,start:c.start,duration:c.duration,track:c.track,x:c.x,y:c.y,font:c.font,size:c.size})),layers:snapshot.timelineLayers},null,2);database.close()}
+}
+</script></body></html>

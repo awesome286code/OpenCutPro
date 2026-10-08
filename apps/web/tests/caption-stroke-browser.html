@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi"><meta charset="utf-8"><title>Caption outline rendering QA</title><body>
+<main><h1>Caption outline · before / preview / export</h1><button id="run">Render chữ Trung / Pinyin / Việt</button><pre id="result">Ready</pre><div id="samples"></div></main>
+<style>body{margin:0;background:#121216;color:#eee;font:14px sans-serif}main{padding:20px;max-width:1000px;margin:auto}h1{font-size:20px}h2{font-size:14px}#run{padding:12px;border:0;border-radius:8px;background:#c5f36b}#result{white-space:pre-wrap}.sample{position:relative;overflow:hidden;width:100%;background:#171318}.sample-inner{width:1920px;height:680px;transform-origin:0 0}.sample canvas{display:block;width:100%;height:auto}.sample button{pointer-events:none}.sample-title{color:#c5f36b}</style>
+<script type="module">
+import '/src/styles.css'
+import { getPreviewCaptionStyle, drawExportCaption, captionWeight } from '/src/lib/caption-renderer.ts'
+import { fontLoadRequests } from '/src/lib/font-catalog.ts'
+const captions=[
+ {id:'qa-zh',text:'你知道嗎被風的夜',font:'Noto Sans TC',size:92,color:'#fff5e4',strokeWidth:2,y:20,fontWeight:700},
+ {id:'qa-pinyin',text:'nǐ zhī dào má bèi fēng de yè',font:'Inter Variable',size:54,color:'#ffbda1',strokeWidth:1,y:46,fontWeight:500},
+ {id:'qa-vietnamese',text:'Người biết đêm bị lừa',font:'Inter Variable',size:62,color:'#f7f4ed',strokeWidth:1,y:75,fontWeight:600},
+].map(c=>({...c,size:c.size*2,strokeWidth:c.strokeWidth*2,start:0,duration:5,x:50,shadow:true,stroke:'#10121a'}))
+const lastWidths=new WeakMap()
+const resize=new ResizeObserver(entries=>entries.forEach(({target})=>{const inner=target.querySelector('.sample-inner'),width=target.clientWidth;if(inner&&lastWidths.get(target)!==width){lastWidths.set(target,width);requestAnimationFrame(()=>{if(!target.isConnected)return;const scale=width/1920;inner.style.transform=`scale(${scale})`;target.style.height=`${680*scale}px`})}}))
+document.querySelector('#run').onclick=async()=>{
+ document.querySelector('#samples').replaceChildren();await Promise.all(fontLoadRequests(captions.map(c=>({font:c.font,text:c.text,size:c.size,weight:captionWeight(c)}))).map(r=>document.fonts.load(r.css,r.text)))
+ for(const mode of ['before','preview','export']){
+  const section=document.createElement('section'),heading=document.createElement('h2'),sample=document.createElement('div');heading.textContent=mode==='before'?'Trước · stroke đè lên chữ':mode==='preview'?'Sau · preview đã sửa':'Sau · export canvas';heading.className='sample-title';sample.className=`sample ${mode}`;section.append(heading,sample);document.querySelector('#samples').append(section)
+  if(mode==='export'){const canvas=document.createElement('canvas');canvas.width=1920;canvas.height=680;const ctx=canvas.getContext('2d');ctx.fillStyle='#171318';ctx.fillRect(0,0,canvas.width,canvas.height);captions.forEach(c=>drawExportCaption(ctx,c,1,canvas.width,canvas.height));sample.append(canvas)}
+  else{const inner=document.createElement('div');inner.className='sample-inner';sample.append(inner);captions.forEach(c=>{const el=document.createElement('button');el.className='preview-caption';el.textContent=c.text;Object.assign(el.style,getPreviewCaptionStyle(c,1,1,'16:9'));if(mode==='before')el.style.paintOrder='normal';inner.append(el)});resize.observe(sample)}
+ }
+ await document.fonts.ready
+ document.querySelector('#result').textContent=JSON.stringify({status:'Rendered',fontsReady:document.fonts.status,paintOrders:[...document.querySelectorAll('.preview .preview-caption')].map(el=>getComputedStyle(el).paintOrder),note:'So sánh các nét đen bên trong chữ; viền ngoài và shadow vẫn được giữ.'},null,2)
+}
+</script></body></html>

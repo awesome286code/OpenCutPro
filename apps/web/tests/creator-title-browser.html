@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="vi"><meta charset="utf-8"><title>Creator title renderer QA</title>
+<body><main id="creator-title-qa"><h1>Creator title · preview / export QA</h1><button id="run-title-qa">Run renderer parity checks</button><pre id="qa-result">Ready</pre><div id="qa-grid"></div></main>
+<style>
+  body { margin: 0; background: #121318; color: #eee; font-family: sans-serif; overflow: auto; }
+  #creator-title-qa { padding: 24px; } #creator-title-qa h1 { font-size: 22px; }
+  #run-title-qa { padding: 10px 16px; background: #c5ef7a; color: #101413; border-radius: 8px; }
+  #qa-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(800px, 100%), 1fr)); gap: 24px; }
+  .qa-pair { display: flex; gap: 16px; } .qa-dom, .qa-canvas { position: relative; width: 216px; height: 384px; overflow: hidden; background: #151515; }
+  .qa-dom > img { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .qa-dom > button { margin: 0; border: 0; width: max-content; white-space: pre; position: absolute; border-radius: 0; }
+</style>
+<script type="module">
+  import '/src/styles.css'
+  import { CREATOR_STYLES } from '/src/lib/creator-styles.ts'
+  import { SHORT_TEMPLATES, templateSceneDataUrl, styleIntelligenceCaption } from '/src/lib/short-video.ts'
+  import { CREATOR_TITLE_PRESETS, createCreatorTitles, creatorTitleDesign, trackedTextLayout } from '/src/lib/creator-titles.ts'
+  import { getPreviewCaptionStyle, drawExportCaption, captionWeight } from '/src/lib/caption-renderer.ts'
+  import { captionFontStack, fontLoadRequests } from '/src/lib/font-catalog.ts'
+  const templates = [...CREATOR_STYLES, ...SHORT_TEMPLATES.filter(t => t.kind === 'lyric')]
+  const cases = [...templates.map(template => ({template, design: 'auto'})), ...['9:16', '16:9'].flatMap(ratio => CREATOR_TITLE_PRESETS.filter(p=>p.id!=='auto').map(p=>({template:{...CREATOR_STYLES[0],ratio},design:p.id})))]
+  document.querySelector('#run-title-qa').onclick = async () => {
+    const failures = [], comparisons = []
+    document.querySelector('#qa-grid').replaceChildren()
+    for (const [index, {template, design}] of cases.entries()) {
+      const wide = template.ratio === '16:9', width = wide ? 1920 : 1080, height = wide ? 1080 : 1920, scale = .2
+      const text = index < 3 ? '北方' : creatorTitleDesign(template).sample
+      const titles = createCreatorTitles(template, { enabled: true, title: text, subtitle: index < 3 ? '来自声音的故事' : 'A song to remember', design }, 200, 'qa', 3).filter(c => c.creatorTitlePhase === 'opening')
+      const lyric = styleIntelligenceCaption({ id: 'lyric', text: '风经过，光留下', start: 0, duration: 8, x: 50, y: 76, font: 'Inter', size: 90, color: '#fff' }, template)
+      const captions = [...titles, lyric]
+      await Promise.all(fontLoadRequests(captions.map(c => ({ font: c.font, text: c.text, size: c.size, weight: captionWeight(c) }))).map(r => document.fonts.load(r.css, r.text)))
+      const section = document.createElement('section'), heading = document.createElement('h2'), pair = document.createElement('div'), dom = document.createElement('div'), canvas = document.createElement('canvas')
+      heading.textContent = template.name + ' / ' + design + ' · ' + template.ratio; pair.className = 'qa-pair'; dom.className = 'qa-dom'; canvas.className = 'qa-canvas'; canvas.width = width; canvas.height = height
+      for(const surface of [dom,canvas]) { surface.style.width = `${width*scale}px`; surface.style.height = `${height*scale}px` }
+      const img = new Image(); img.src = templateSceneDataUrl(template, 0); await img.decode(); dom.append(img)
+      const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0, width, height)
+      for (const caption of captions) {
+        const element = document.createElement('button'); element.textContent = caption.text
+        Object.assign(element.style, getPreviewCaptionStyle(caption, 1, width*scale / 1920, template.ratio)); dom.append(element)
+        drawExportCaption(ctx, caption, 1, width, height)
+      }
+      pair.append(dom, canvas); section.append(heading, pair); document.querySelector('#qa-grid').append(section)
+      for (const [i, caption] of titles.entries()) {
+        const element = dom.querySelectorAll('button')[i], box = element.getBoundingClientRect(), parent = dom.getBoundingClientRect()
+        ctx.font = `${captionWeight(caption)} ${caption.size}px ${captionFontStack(caption.font)}`; ctx.fontKerning = 'none'
+        const widths = caption.text.split('\n').map(line => trackedTextLayout(line, glyph => ctx.measureText(glyph).width, caption.letterSpacing ?? 0).width)
+        const delta = box.width / scale - Math.max(...widths)
+        comparisons.push({ style: template.id, role: caption.creatorTitle, delta: +delta.toFixed(2) })
+        if (Math.abs(delta) > 1) failures.push(`Width mismatch: ${template.id}/${caption.creatorTitle}: ${delta}`)
+        if (box.left < parent.left - .5 || box.right > parent.right + .5 || box.top < parent.top || box.bottom > parent.bottom) failures.push(`Clipped title: ${template.id}/${caption.creatorTitle}`)
+      }
+    }
+    document.querySelector('#qa-result').textContent = JSON.stringify({ status: failures.length ? 'FAIL' : 'PASS', styles: templates.length, cases:cases.length, measurements: comparisons.length, maxDelta: Math.max(...comparisons.map(c => Math.abs(c.delta))), failures }, null, 2)
+  }
+</script></body></html>

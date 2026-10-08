@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="vi"><meta charset="utf-8"><title>Scroll lyrics preview/export QA</title>
+<body><main><h1>Scroll & fade · DOM preview / canvas export</h1><button id="run">Run scroll renderer checks</button><pre id="result">Ready</pre><div id="grid"></div></main>
+<style>body{background:#15171b;color:#eee;font:14px sans-serif;margin:0;padding:24px}button{padding:12px;background:#c5f36b;border:0;border-radius:8px}#grid{display:grid;gap:24px}.pair{display:flex;gap:16px}.surface{position:relative;overflow:hidden;background:#111}.surface>img{position:absolute;inset:0;object-fit:cover;width:100%;height:100%}.surface>button{position:absolute;white-space:pre;margin:0;border:0;width:max-content;border-radius:0}pre{white-space:pre-wrap}</style>
+<script type="module">
+import '/src/styles.css'
+import { SCROLL_CREATOR_STYLES } from '/src/lib/creator-styles.ts'
+import { createIntelligenceSequence, getIntelligenceSceneCount, templateSceneDataUrl, loadTemplateSceneBlob } from '/src/lib/short-video.ts'
+import { makeBilingualCaptions, applyProfessionalLyricStyle, lyricDisplayText } from '/src/lib/bilingual-captions.ts'
+import { resolveCaptionFrames } from '/src/lib/lyric-scroll.ts'
+import { getPreviewCaptionStyle, drawExportCaption, captionWeight } from '/src/lib/caption-renderer.ts'
+import { fontLoadRequests } from '/src/lib/font-catalog.ts'
+document.querySelector('#run').onclick=async()=>{
+ const failures=[],checks=[];document.querySelector('#grid').replaceChildren()
+ for(const template of SCROLL_CREATOR_STYLES){
+  const sequence=createIntelligenceSequence(template,Array(getIntelligenceSceneCount(24)).fill('art'),'audio',24,Array.from({length:6},(_,i)=>({text:['你知道被風吹過的夜晚','聽見風的聲音','讓旋律慢慢流動'][i%3],timestamp:[i*4,(i+1)*4]})),0,0,0,'scroll',{enabled:true,title:'北方 · Northern Lights',subtitle:'A journey in sound',design:'auto'})
+  const sources=sequence.captions.filter(c=>!c.creatorTitle),captions=[...applyProfessionalLyricStyle([...sources,...makeBilingualCaptions(sources,sources.map(()=> 'Gió đi qua, ánh sáng ở lại'),'both',1,2)]),...sequence.captions.filter(c=>c.creatorTitle)]
+  await Promise.all(fontLoadRequests(captions.map(c=>({font:c.font,text:c.text,size:c.size,weight:captionWeight(c)}))).map(r=>document.fonts.load(r.css,r.text)))
+  const blob=await loadTemplateSceneBlob(template,0);if(blob.type!=='image/png')failures.push('Non-raster media '+template.id)
+  const img=new Image();img.src=templateSceneDataUrl(template,0);await img.decode()
+  const wide=template.ratio==='16:9',w=wide?1920:1080,h=wide?1080:1920,scale=.25
+  for(const time of [4,4.25,5,9]){
+   const section=document.createElement('section'),heading=document.createElement('h2'),pair=document.createElement('div'),dom=document.createElement('div'),canvas=document.createElement('canvas')
+   heading.textContent=template.name+' · '+time+'s';pair.className='pair';dom.className='surface';canvas.className='surface';canvas.width=w;canvas.height=h
+   for(const el of [dom,canvas]){el.style.width=`${w*scale}px`;el.style.height=`${h*scale}px`}
+   dom.append(img.cloneNode());const ctx=canvas.getContext('2d'),cover=Math.max(w/img.width,h/img.height),dw=img.width*cover,dh=img.height*cover;ctx.drawImage(img,(w-dw)/2,(h-dh)/2,dw,dh)
+   const frames=resolveCaptionFrames(captions,time)
+   for(const frame of frames){const c=frame.caption,b=document.createElement('button');b.textContent=lyricDisplayText(c);Object.assign(b.style,getPreviewCaptionStyle(c,time,w*scale/1920,template.ratio,frame));dom.append(b);drawExportCaption(ctx,c,time,w,h,frame)}
+   pair.append(dom,canvas);section.append(heading,pair);document.querySelector('#grid').append(section)
+   const boxes=[]
+   for(const [i,frame]of frames.entries()){
+    const box=dom.querySelectorAll('button')[i].getBoundingClientRect(),parent=dom.getBoundingClientRect(),style=getPreviewCaptionStyle(frame.caption,time,w*scale/1920,template.ratio,frame)
+    if(box.left<parent.left-.5||box.right>parent.right+.5)failures.push('Horizontal overflow '+template.id+'/'+frame.caption.id)
+    if(Number(style.opacity)> .9&&!frame.caption.creatorTitle)boxes.push({id:frame.caption.id,top:box.top,bottom:box.bottom})
+   }
+   boxes.sort((a,b)=>a.top-b.top);if(boxes.some((b,i)=>i&&b.top<boxes[i-1].bottom-.5))failures.push('Active bilingual overlap '+template.id+' at '+time)
+   checks.push({id:template.id,time,frames:frames.length,pngBytes:blob.size})
+  }
+ }
+ document.querySelector('#result').textContent=JSON.stringify({status:failures.length?'FAIL':'PASS',cases:checks.length,templates:SCROLL_CREATOR_STYLES.length,failures},null,2)
+}
+</script></body></html>

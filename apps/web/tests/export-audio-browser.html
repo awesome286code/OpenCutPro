@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Export audio regression test</title>
+<style>body{font:16px system-ui;background:#17171b;color:#eee;padding:24px}button{padding:12px}pre{white-space:pre-wrap}video{max-width:640px;width:100%}</style>
+<h1>Export audio regression test</h1><p>Synthetic media only. No editor project or user files are read.</p>
+<button id="run">Run 2K audio stress test</button><pre id="result" role="status">Ready</pre><video id="preview" controls></video>
+<script type="module">
+import { scheduleExportAudio, exportClockTime } from '/src/lib/export-audio.ts'
+const result=document.querySelector('#result'), button=document.querySelector('#run')
+const makeBuffer=(context,seconds,chirp=false)=>{
+  const buffer=context.createBuffer(1,seconds*48000,48000), data=buffer.getChannelData(0)
+  for(let i=0;i<data.length;i++){const t=i/48000;data[i]=chirp ? .45*Math.sin(2*Math.PI*(220*t+30*t*t)) : .4*Math.sin(2*Math.PI*440*t)}
+  return buffer
+}
+button.onclick=async()=>{
+  button.disabled=true;let audio,stream,stopAudio,recorder
+  try{
+    result.textContent='Checking sample-accurate trim, gap, overlap, fade and volume…'
+    const offline=new OfflineAudioContext(1,4*48000,48000), buffer=makeBuffer(offline,8)
+    const base={id:'first',assetId:'tone',url:'',name:'tone',start:0,trimStart:2,trimEnd:4,duration:2,volume:1,ducking:false}
+    scheduleExportAudio(offline,offline.destination,[{clip:base,buffer},{clip:{...base,id:'after-gap',start:3,trimStart:4,trimEnd:5,duration:1,volume:.5,fadeIn:.2,fadeOut:.2},buffer}],0)
+    const mixed=await offline.startRendering(), samples=mixed.getChannelData(0), original=buffer.getChannelData(0)
+    let trimError=0,gapPeak=0
+    for(let i=100;i<48000;i++)trimError=Math.max(trimError,Math.abs(samples[i]-original[96000+i]))
+    for(let i=Math.ceil(2.05*48000);i<Math.floor(2.95*48000);i++)gapPeak=Math.max(gapPeak,Math.abs(samples[i]))
+    if(!Number.isFinite(trimError)||!Number.isFinite(gapPeak)||trimError>.0001||gapPeak>.0001)throw Error(`Offline mix failed: trim=${trimError}, gap=${gapPeak}`)
+    result.textContent=`Offline PASS: trim error ${trimError.toFixed(6)}, gap peak ${gapPeak.toFixed(6)}.\nRecording a 6-second 2K chirp under repeated 200ms main-thread stalls…`
+    audio=new AudioContext({sampleRate:48000,latencyHint:'playback'});await audio.resume();await audio.suspend()
+    const destination=audio.createMediaStreamDestination(), tone=makeBuffer(audio,6,true)
+    const canvas=document.createElement('canvas');canvas.width=2560;canvas.height=1440
+    const ctx=canvas.getContext('2d'), video=canvas.captureStream(0), track=video.getVideoTracks()[0]
+    stream=new MediaStream([...video.getVideoTracks(),...destination.stream.getAudioTracks()])
+    recorder=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp8,opus',videoBitsPerSecond:8000000,audioBitsPerSecond:192000})
+    const chunks=[],finished=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onstop=()=>resolve(new Blob(chunks,{type:recorder.mimeType}));recorder.onerror=reject})
+    const epoch=audio.currentTime
+    stopAudio=scheduleExportAudio(audio,destination,[{clip:{...base,trimStart:0,trimEnd:6,duration:6},buffer:tone}],epoch)
+    recorder.start(1000);await audio.resume()
+    let frames=0,stalls=0
+    while(exportClockTime(audio.currentTime,epoch,6)<6){
+      const t=exportClockTime(audio.currentTime,epoch,6)
+      const gradient=ctx.createLinearGradient(0,0,2560,1440);gradient.addColorStop(0,'#233065');gradient.addColorStop(1,'#b2366c');ctx.fillStyle=gradient;ctx.fillRect(0,0,2560,1440)
+      ctx.fillStyle='white';ctx.font='80px sans-serif';ctx.fillText(`2K stress · ${t.toFixed(2)}s`,100,900);track.requestFrame();frames++
+      if(frames%5===0){const until=performance.now()+200;while(performance.now()<until){}stalls++}
+      await new Promise(resolve=>setTimeout(resolve,20))
+    }
+    stopAudio();stopAudio=null;recorder.stop();const blob=await finished
+    document.querySelector('#preview').src=URL.createObjectURL(blob)
+    const decoded=await audio.decodeAudioData(await blob.arrayBuffer()), channel=decoded.getChannelData(0)
+    let quietWindows=0,worstRms=1,backwards=0,previousFrequency=0
+    for(let t=.5;t<5.5;t+=.1){
+      const start=Math.floor(t*decoded.sampleRate),end=start+Math.floor(.1*decoded.sampleRate);let sum=0,crossings=0
+      for(let i=start;i<end;i++){sum+=channel[i]*channel[i];if(i>start&&channel[i-1]<0&&channel[i]>=0)crossings++}
+      const rms=Math.sqrt(sum/(end-start)),frequency=crossings/.1;worstRms=Math.min(worstRms,rms);if(rms<.15)quietWindows++;if(previousFrequency&&frequency<previousFrequency-20)backwards++;previousFrequency=frequency
+    }
+    if(quietWindows||backwards||decoded.duration<5.9||decoded.duration>6.3)throw Error(`Audio continuity failed: duration=${decoded.duration}, quiet=${quietWindows}, backwards=${backwards}`)
+    result.textContent=`PASS\nOffline trim and gap exact.\n2K recording: ${frames} frames, ${stalls} main-thread stalls of 200ms.\nDecoded audio: ${decoded.duration.toFixed(3)}s, quiet windows=${quietWindows}, backwards chirp windows=${backwards}, minimum RMS=${worstRms.toFixed(3)}.\nAudio remained continuous while video frames were delayed. Preview the recorded WebM below.`
+  }catch(error){result.textContent='FAIL: '+(error?.message??error)}finally{stopAudio?.();if(recorder?.state==='recording')recorder.stop();stream?.getTracks().forEach(track=>track.stop());await audio?.close();button.disabled=false}
+}
+</script></html>
